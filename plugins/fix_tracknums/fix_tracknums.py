@@ -56,7 +56,7 @@ How to use:
   </li>
 </ol>
 '''
-PLUGIN_VERSION = '1.3.0'
+PLUGIN_VERSION = '1.3.1'
 PLUGIN_API_VERSIONS = ['0.15', '1.0', '2.0']
 PLUGIN_LICENSE = 'GPL-3.0-or-later'
 PLUGIN_LICENSE_URL = 'https://www.gnu.org/licenses/gpl.txt'
@@ -201,35 +201,46 @@ class FixTrackNumsUsingSeq(BaseAction):
 
             cluster.update()
 
+class TrackInfo:
+
+    def __init__(self):
+        self.fileIndex = 0
+        self.diskNumber = 0
+        self.trackNumber = 0
+        self.filePath = ''
+
 class FixTrackNumsUsingFileNames(BaseAction):
     NAME = 'Fix track numbers using filenames'
     TITLE_REGEX = re.compile(r"[^\d\-]+")  # Only digits and '-' allowed
 
     def callback(self, objs):
-        log.debug('[FixTrackNumsUsingFileNames WOMBAT TEST]')
+        log.debug('[FixTrackNumsUsingFileNames 1]')
 
         for cluster in objs:
             if not isinstance(cluster, Cluster) or not cluster.files:
                 continue
 
+            nfiles = len(cluster.files)
+            log.debug('FixTrackNumsUsingFileNames nfiles=%i' % (nfiles))
+
             tracks = []  # Sorted list of FixedTrack
+            tracksDict = {}
 
             for i, f in enumerate(cluster.files):
               
-                fname = f.base_filename
-                log.debug('FixTrackNumsUsingFileNames for [%i]="%s" (%s)' % (i, f.filename, fname))
+                log.debug('FixTrackNumsUsingFileNames for index=%i, filename="%s"' % (i, f.base_filename))
 
                 if not f or not f.metadata or 'title' not in f.metadata:
                     log.debug('No file/metadata/title for [%i]' % (i))
                     continue
 
-                track = FixedTrack(i + 1, f.metadata['title'])
-
+                track = FixedTrack(999, f.metadata['title'])
+ 
                 if not track.title:
                     log.debug('No title for [%i]' % (i))
                     continue
 
-                title_nums = self.TITLE_REGEX.sub('', track.title)
+                title_nums = self.TITLE_REGEX.sub('', f.base_filename)
                 dash_index = title_nums.find('-')
 
                 if dash_index < 0:
@@ -243,60 +254,19 @@ class FixTrackNumsUsingFileNames(BaseAction):
                     log.debug('Invalid ints in [%i][%s]' % (i, title_nums))
                     continue
 
+                trackInfo = TrackInfo()
+                trackInfo.fileIndex = i
+                trackInfo.diskNumber = track.title_num1
+                trackInfo.trackNumber = track.title_num2
+                trackInfo.filePath = f.filename
+                tracksDict[track.title_num1] = trackInfo
+
                 was_added = False
 
-                # Not empty?
-                if tracks:
-                    # Justin Timberlake?
-                    for j, t in enumerate(tracks):
-                        if was_added:
-                            # Increment all track numbers above last added one
-                            t.tracknumber += 1
-                        # Don't do "<=" on title_num2 to preserve sequence
-                        # - Case 1: "2-10" < "3-1"
-                        # - Case 2: "2-1"  < "2-10"
-                        elif ((track.title_num1 < t.title_num1) or
-                              (track.title_num1 == t.title_num1 and
-                               track.title_num2 < t.title_num2)):
-                            # t.tracknumber will be updated in next loop cycle
-                            track.tracknumber = t.tracknumber
-                            tracks.insert(j, track)
-                            was_added = True  # Don't break
+            # for t in enumerate(tracksDict.keys()):
+            #     log.debug('KEY [%i]' % (t))
 
-                if not was_added:
-                    tracks.append(track)
-
-            # Let's build a dictionary of the new (fixed) track numbers
-            new_tracks = {}
-
-            for i, t in enumerate(tracks):
-                # Assume title is unique
-                new_tracks[t.title] = str(t.tracknumber)
-
-            for i, f in enumerate(cluster.files):
-                if not f or not f.metadata or 'title' not in f.metadata:
-                    # Already logged
-                    continue
-
-                key = f.metadata['title']
-
-                if not key:
-                    # Already logged
-                    continue
-                if key not in new_tracks:
-                    log.debug('No new track for [%i][%s]' % (i, key))
-                    continue
-
-                new_track = new_tracks[key]
-
-                log.debug('Change [%s]=>[%s]' % (key, new_track))
-
-                f.metadata['tracknumber'] = new_track
-                f.metadata.changed = True
-                f.update(signal=True)
-
-            cluster.update()
-
+            # cluster.update()
 
 register_cluster_action(FixTrackNumsUsingTitles())
 register_cluster_action(FixTrackNumsUsingSeq())
