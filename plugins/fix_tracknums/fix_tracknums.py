@@ -18,13 +18,13 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 PLUGIN_NAME = 'Fix Track Numbers'
-PLUGIN_AUTHOR = 'Jonathan Bradley Whited'
+PLUGIN_AUTHOR = 'Jonathan Bradley Whited, modified by Nigel Taylor'
 PLUGIN_DESCRIPTION = '''
-Fix the track numbers in a cluster by either using the track titles (1) or sequential order (2).
+Fix the track numbers in a cluster by either using the track titles (1) or sequential order (2) or file names.
 
 <ol>
   <li>
-    The title should contain something like "#-#" (number dash number) and be unique.<br />
+    The title or file name should contain something like "#-#" (number dash number) and be unique.<br />
     All non-numbers and non-dashes will be removed when comparing the titles.<br />
     This is especially useful for Language Audio Lessons, like this:
     <pre>- Title: "Unit 1 - Lesson 10"</pre>
@@ -56,7 +56,7 @@ How to use:
   </li>
 </ol>
 '''
-PLUGIN_VERSION = '0.2.1'
+PLUGIN_VERSION = '1.3.0'
 PLUGIN_API_VERSIONS = ['0.15', '1.0', '2.0']
 PLUGIN_LICENSE = 'GPL-3.0-or-later'
 PLUGIN_LICENSE_URL = 'https://www.gnu.org/licenses/gpl.txt'
@@ -66,6 +66,8 @@ from picard.cluster import Cluster
 from picard.ui.itemviews import BaseAction, register_cluster_action
 
 import re
+import os
+import os.path
 
 # FIXME: for Python 3.0 and Picard 2.0, use String.format(...) instead of %?
 
@@ -199,5 +201,103 @@ class FixTrackNumsUsingSeq(BaseAction):
 
             cluster.update()
 
+class FixTrackNumsUsingFileNames(BaseAction):
+    NAME = 'Fix track numbers using filenames'
+    TITLE_REGEX = re.compile(r"[^\d\-]+")  # Only digits and '-' allowed
+
+    def callback(self, objs):
+        log.debug('[FixTrackNumsUsingFileNames WOMBAT TEST]')
+
+        for cluster in objs:
+            if not isinstance(cluster, Cluster) or not cluster.files:
+                continue
+
+            tracks = []  # Sorted list of FixedTrack
+
+            for i, f in enumerate(cluster.files):
+              
+                fname = f.base_filename
+                log.debug('FixTrackNumsUsingFileNames for [%i]="%s" (%s)' % (i, f.filename, fname))
+
+                if not f or not f.metadata or 'title' not in f.metadata:
+                    log.debug('No file/metadata/title for [%i]' % (i))
+                    continue
+
+                track = FixedTrack(i + 1, f.metadata['title'])
+
+                if not track.title:
+                    log.debug('No title for [%i]' % (i))
+                    continue
+
+                title_nums = self.TITLE_REGEX.sub('', track.title)
+                dash_index = title_nums.find('-')
+
+                if dash_index < 0:
+                    log.debug('No dash in [%i][%s]' % (i, title_nums))
+                    continue
+
+                try:
+                    track.title_num1 = int(title_nums[:dash_index])
+                    track.title_num2 = int(title_nums[dash_index + 1:])
+                except ValueError:
+                    log.debug('Invalid ints in [%i][%s]' % (i, title_nums))
+                    continue
+
+                was_added = False
+
+                # Not empty?
+                if tracks:
+                    # Justin Timberlake?
+                    for j, t in enumerate(tracks):
+                        if was_added:
+                            # Increment all track numbers above last added one
+                            t.tracknumber += 1
+                        # Don't do "<=" on title_num2 to preserve sequence
+                        # - Case 1: "2-10" < "3-1"
+                        # - Case 2: "2-1"  < "2-10"
+                        elif ((track.title_num1 < t.title_num1) or
+                              (track.title_num1 == t.title_num1 and
+                               track.title_num2 < t.title_num2)):
+                            # t.tracknumber will be updated in next loop cycle
+                            track.tracknumber = t.tracknumber
+                            tracks.insert(j, track)
+                            was_added = True  # Don't break
+
+                if not was_added:
+                    tracks.append(track)
+
+            # Let's build a dictionary of the new (fixed) track numbers
+            new_tracks = {}
+
+            for i, t in enumerate(tracks):
+                # Assume title is unique
+                new_tracks[t.title] = str(t.tracknumber)
+
+            for i, f in enumerate(cluster.files):
+                if not f or not f.metadata or 'title' not in f.metadata:
+                    # Already logged
+                    continue
+
+                key = f.metadata['title']
+
+                if not key:
+                    # Already logged
+                    continue
+                if key not in new_tracks:
+                    log.debug('No new track for [%i][%s]' % (i, key))
+                    continue
+
+                new_track = new_tracks[key]
+
+                log.debug('Change [%s]=>[%s]' % (key, new_track))
+
+                f.metadata['tracknumber'] = new_track
+                f.metadata.changed = True
+                f.update(signal=True)
+
+            cluster.update()
+
+
 register_cluster_action(FixTrackNumsUsingTitles())
 register_cluster_action(FixTrackNumsUsingSeq())
+register_cluster_action(FixTrackNumsUsingFileNames())
